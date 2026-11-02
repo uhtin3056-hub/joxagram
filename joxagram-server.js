@@ -85,7 +85,7 @@ for (const st of [
   `ALTER TABLE users ADD COLUMN aupd INTEGER DEFAULT 0`,
   `ALTER TABLE users ADD COLUMN gcol TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN gl TEXT DEFAULT '[]'`, `ALTER TABLE users ADD COLUMN gsel INTEGER DEFAULT 0`,
   `ALTER TABLE messages ADD COLUMN gift INTEGER`, `ALTER TABLE messages ADD COLUMN rd INTEGER DEFAULT 0`,
-  `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN ahide INTEGER DEFAULT 0`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
 ]) { try { await db.exec(st); } catch (e) { if (!/duplicate|already|exists/i.test(e.message)) console.error('migratsiya:', st.slice(0, 60), e.message); } }
 
 // ---------- yordamchilar ----------
@@ -109,8 +109,8 @@ const eq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(
 const hashPw = async (pw, salt) => (await scrypt(pw, salt, 64)).toString('hex');
 const validBirth = (s) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s); if (!m) return false; const d = +m[1], mo = +m[2], y = +m[3], t = new Date(y, mo - 1, d); return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d && y >= 1900 && t <= new Date(); };
 const badgeOf = (u) => { if (!u.badge || !(u.premium_until > Date.now())) return ''; return u.badge.startsWith('i:') ? 'u:/api/users/' + u.id + '/badge?v=' + u.badge.slice(2) : u.badge; };
-const pub = (u) => ({ id: u.id, bd: badgeOf(u), username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin, gc: u.gcol || '', gl: (() => { try { return JSON.parse(u.gl || '[]'); } catch { return []; } })(), ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
-const me = (u) => ({ ...pub(u), bio: u.bio, birth: u.birth, stars: u.stars, premium_until: u.premium_until, is_admin: !!u.is_admin, badge: u.badge || '', bg: u.bgupd ? '/api/me/chatbg?v=' + u.bgupd : '' });
+const pub = (u) => ({ id: u.id, bd: badgeOf(u), username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin && !u.ahide, gc: u.gcol || '', gl: (() => { try { return JSON.parse(u.gl || '[]'); } catch { return []; } })(), ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
+const me = (u) => ({ ...pub(u), bio: u.bio, birth: u.birth, stars: u.stars, premium_until: u.premium_until, is_admin: !!u.is_admin, ahide: !!u.ahide, badge: u.badge || '', bg: u.bgupd ? '/api/me/chatbg?v=' + u.bgupd : '' });
 const blocked = async (a, b) => !!await q('SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)').get(a, b, b, a);
 const userBy = async (name) => await q('SELECT * FROM users WHERE username=?').get(String(name || '').toLowerCase());
 const taken = async (un) => !!(await userBy(un) || await q('SELECT 1 FROM channels WHERE username=?').get(un));
@@ -640,6 +640,11 @@ async function api(req, res, url) {
   if (key === 'GET /api/me/chatbg') {
     const d = await q('SELECT data FROM chatbg WHERE user_id=?').get(u.id), mt = d && MEDIA_IMG.exec(d.data); if (!mt) return fail(res, 404, 'Topilmadi.');
     const buf = Buffer.from(mt[2], 'base64'); res.writeHead(200, { 'content-type': mt[1], 'cache-control': 'private, max-age=31536000, immutable', 'content-length': buf.length }); return res.end(buf);
+  }
+  if (key === 'PUT /api/me/adminhide') {
+    if (!u.is_admin) return fail(res, 403, 'Faqat admin uchun.');
+    const b = await readBody(req); await q('UPDATE users SET ahide=? WHERE id=?').run(b.hide ? 1 : 0, u.id); bcast(u.id);
+    return send(res, 200, { user: me(await q('SELECT * FROM users WHERE id=?').get(u.id)) });
   }
   if (key === 'PUT /api/me/badge') {
     if (!(u.premium_until > Date.now())) return fail(res, 403, 'Nik belgisi — Premium imkoniyati.');
