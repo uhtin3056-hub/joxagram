@@ -73,6 +73,10 @@ for (const st of [
   `CREATE TABLE IF NOT EXISTS gifts_owned(id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, gift INTEGER NOT NULL, price REAL NOT NULL, from_id INTEGER NOT NULL, hidden INTEGER DEFAULT 0, sold INTEGER DEFAULT 0, created INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS gifts_o ON gifts_owned(owner_id,sold)`,
   `CREATE TABLE IF NOT EXISTS chat_clear(user_id INTEGER NOT NULL, peer_id INTEGER NOT NULL, upto INTEGER NOT NULL, PRIMARY KEY(user_id,peer_id))`,
+  `CREATE TABLE IF NOT EXISTS saved(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '', kind TEXT DEFAULT '', media_id INTEGER DEFAULT 0, vtext TEXT DEFAULT '', created INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS saved_u ON saved(user_id,id)`,
+  `CREATE TABLE IF NOT EXISTS chatbg(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, upd INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS badges(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, upd INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS gprice(gift INTEGER NOT NULL, slot INTEGER NOT NULL, price REAL NOT NULL, PRIMARY KEY(gift,slot))`,
 ]) await db.exec(st);
 for (const st of [
@@ -80,7 +84,8 @@ for (const st of [
   `ALTER TABLE cmsgs ADD COLUMN kind TEXT DEFAULT ''`, `ALTER TABLE cmsgs ADD COLUMN media_id INTEGER DEFAULT 0`, `ALTER TABLE cmsgs ADD COLUMN vtext TEXT DEFAULT ''`,
   `ALTER TABLE users ADD COLUMN aupd INTEGER DEFAULT 0`,
   `ALTER TABLE users ADD COLUMN gcol TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN gl TEXT DEFAULT '[]'`, `ALTER TABLE users ADD COLUMN gsel INTEGER DEFAULT 0`,
-  `ALTER TABLE messages ADD COLUMN gift INTEGER`,
+  `ALTER TABLE messages ADD COLUMN gift INTEGER`, `ALTER TABLE messages ADD COLUMN rd INTEGER DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
 ]) { try { await db.exec(st); } catch (e) { if (!/duplicate column/i.test(e.message)) throw e; } }
 
 // ---------- yordamchilar ----------
@@ -103,8 +108,9 @@ const nameErr = (u) => !UNAME.test(u) ? 'Username faqat lotin harflari (a–z) v
 const eq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const hashPw = async (pw, salt) => (await scrypt(pw, salt, 64)).toString('hex');
 const validBirth = (s) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s); if (!m) return false; const d = +m[1], mo = +m[2], y = +m[3], t = new Date(y, mo - 1, d); return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d && y >= 1900 && t <= new Date(); };
-const pub = (u) => ({ id: u.id, username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin, gc: u.gcol || '', gl: (() => { try { return JSON.parse(u.gl || '[]'); } catch { return []; } })(), ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
-const me = (u) => ({ ...pub(u), bio: u.bio, birth: u.birth, stars: u.stars, premium_until: u.premium_until, is_admin: !!u.is_admin });
+const badgeOf = (u) => { if (!u.badge || !(u.premium_until > Date.now())) return ''; return u.badge.startsWith('i:') ? 'u:/api/users/' + u.id + '/badge?v=' + u.badge.slice(2) : u.badge; };
+const pub = (u) => ({ id: u.id, bd: badgeOf(u), username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin, gc: u.gcol || '', gl: (() => { try { return JSON.parse(u.gl || '[]'); } catch { return []; } })(), ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
+const me = (u) => ({ ...pub(u), bio: u.bio, birth: u.birth, stars: u.stars, premium_until: u.premium_until, is_admin: !!u.is_admin, badge: u.badge || '', bg: u.bgupd ? '/api/me/chatbg?v=' + u.bgupd : '' });
 const blocked = async (a, b) => !!await q('SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)').get(a, b, b, a);
 const userBy = async (name) => await q('SELECT * FROM users WHERE username=?').get(String(name || '').toLowerCase());
 const taken = async (un) => !!(await userBy(un) || await q('SELECT 1 FROM channels WHERE username=?').get(un));
@@ -194,7 +200,7 @@ async function refreshGifts(uid) {
   await q('UPDATE users SET gcol=?,gl=?,gsel=? WHERE id=?').run(sel ? CAT[sel.gift].c : '', JSON.stringify(rows.slice(-30).map((r) => r.gift)), sel ? sel.id : 0, uid);
   bcast(uid);
 }
-const msgOut = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, created: m.created, edited: !!m.edited, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '', gift: m.gift == null ? null : m.gift });
+const msgOut = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, created: m.created, edited: !!m.edited, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '', gift: m.gift == null ? null : m.gift, read: !!m.rd });
 const kindLabel = (m) => m.text || (m.kind === 'img' ? '[rasm]' : m.kind === 'voice' ? '[ovozli xabar]' : '');
 
 async function auth(req) {
@@ -256,7 +262,7 @@ async function canSeeMedia(id, uid) {
     OR EXISTS(SELECT 1 FROM messages WHERE media_id=? AND (from_id=? OR to_id=?))
     OR EXISTS(SELECT 1 FROM cmsgs x JOIN members m ON m.channel_id=x.channel_id AND m.user_id=? WHERE x.media_id=?)`).get(id, uid, id, uid, uid, uid, id);
 }
-async function sweepMedia() { try { await q('DELETE FROM media WHERE created<? AND id NOT IN (SELECT media_id FROM messages WHERE media_id>0) AND id NOT IN (SELECT media_id FROM cmsgs WHERE media_id>0)').run(Date.now() - DAY); } catch (e) { console.error(e); } }
+async function sweepMedia() { try { await q('DELETE FROM media WHERE created<? AND id NOT IN (SELECT media_id FROM messages WHERE media_id>0) AND id NOT IN (SELECT media_id FROM cmsgs WHERE media_id>0) AND id NOT IN (SELECT media_id FROM saved WHERE media_id>0)').run(Date.now() - DAY); } catch (e) { console.error(e); } }
 sweepMedia(); setInterval(sweepMedia, 3600000).unref();
 tickPrices().catch((e) => console.error('tick', e.message)); setInterval(() => tickPrices().catch(() => {}), Math.min(PRICE_STEP, 60000)).unref();
 function sendBinary(req, res, mime, buf) {
@@ -323,12 +329,12 @@ async function api(req, res, url) {
     return send(res, 200, { users: rows.map(pub), channels: chs.map((c) => ({ id: c.id, username: c.username, name: c.name, descr: c.descr, count: c.cnt, ava: c.hasava ? `/api/channels/${c.id}/avatar?v=${c.upd}` : '' })) });
   }
   if (key === 'GET /api/chats') {
-    const rows = await q(`SELECT x.id uid,x.username,x.name,x.premium_until,x.aupd,x.is_admin,x.gcol,x.gl,m.id mid,m.text,m.kind,m.created,m.from_id FROM messages m
+    const rows = await q(`SELECT x.id uid,x.username,x.name,x.premium_until,x.aupd,x.is_admin,x.gcol,x.gl,x.badge,m.id mid,m.text,m.kind,m.created,m.from_id FROM messages m
       JOIN users x ON x.id=CASE WHEN m.from_id=? THEN m.to_id ELSE m.from_id END
       WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id=? OR to_id=? GROUP BY CASE WHEN from_id=? THEN to_id ELSE from_id END)
       AND m.id>COALESCE((SELECT upto FROM chat_clear WHERE user_id=? AND peer_id=x.id),0)
       AND x.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?) ORDER BY m.id DESC`).all(u.id, u.id, u.id, u.id, u.id, u.id);
-    return send(res, 200, { chats: rows.map((r) => ({ user: pub({ id: r.uid, username: r.username, name: r.name, premium_until: r.premium_until, aupd: r.aupd, is_admin: r.is_admin, gcol: r.gcol, gl: r.gl }), last: { id: r.mid, text: r.text, kind: r.kind || '', created: r.created, mine: r.from_id === u.id } })) });
+    return send(res, 200, { chats: rows.map((r) => ({ user: pub({ id: r.uid, username: r.username, name: r.name, premium_until: r.premium_until, aupd: r.aupd, is_admin: r.is_admin, gcol: r.gcol, gl: r.gl, badge: r.badge }), last: { id: r.mid, text: r.text, kind: r.kind || '', created: r.created, mine: r.from_id === u.id } })) });
   }
   if (key === 'GET /api/messages') {
     const p = await userBy(url.searchParams.get('with')); if (!p) return fail(res, 404, 'Foydalanuvchi topilmadi.');
@@ -588,6 +594,78 @@ async function api(req, res, url) {
     return fail(res, 404, 'Topilmadi.');
   }
 
+
+
+  // ---------- o'qilgan belgisi, saqlangan xabarlar, chat foni, nik belgisi, ovozni matnga aylantirish ----------
+  if (key === 'POST /api/messages/read') {
+    const b = await readBody(req), p = await userBy(b.with); if (!p) return fail(res, 404, 'Foydalanuvchi topilmadi.');
+    const r = await q('UPDATE messages SET rd=1 WHERE from_id=? AND to_id=? AND rd=0').run(p.id, u.id);
+    if (r.changes > 0) push(p.id, 'read', { by: u.id });
+    return send(res, 200, { ok: true, n: r.changes });
+  }
+  const savedOut = (m) => ({ id: m.id, from: u.id, to: u.id, text: m.text, created: m.created, edited: false, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '', gift: null, read: true });
+  if (key === 'GET /api/saved') {
+    const rows = await q('SELECT * FROM saved WHERE user_id=? ORDER BY id DESC LIMIT 200').all(u.id);
+    return send(res, 200, { messages: rows.reverse().map(savedOut) });
+  }
+  if (key === 'POST /api/saved') {
+    if (limited('sv' + u.id, 60, 60000)) return fail(res, 429, 'Juda tez.');
+    const b = await readBody(req), text = String(b.text || '').trim(), mx = await takeMedia(b, u.id); if (mx.err) return fail(res, 400, mx.err);
+    if ((!text && !mx.id) || text.length > 4000) return fail(res, 400, 'Xabar 1–4000 belgi bo’lsin.');
+    const r = await q('INSERT INTO saved(user_id,text,kind,media_id,vtext,created) VALUES(?,?,?,?,?,?)').run(u.id, text, mx.kind, mx.id, mx.vtext, Date.now());
+    return send(res, 201, { message: savedOut(await q('SELECT * FROM saved WHERE id=?').get(r.lastInsertRowid)) });
+  }
+  const sd = /^DELETE \/api\/saved\/(\d+)$/.exec(key);
+  if (sd) { await q('DELETE FROM saved WHERE id=? AND user_id=?').run(Number(sd[1]), u.id); return send(res, 200, { ok: true }); }
+  if (key === 'PUT /api/me/chatbg') {
+    if (!(u.premium_until > Date.now())) return fail(res, 403, 'Chat foni — Premium imkoniyati.');
+    const a = String((await readBody(req, 500000)).image || '');
+    if (a && !(MEDIA_IMG.test(a) && a.length * 0.75 <= 330000)) return fail(res, 400, 'Rasm noto’g’ri yoki juda katta.');
+    if (a) { const n = Date.now(); await q('INSERT OR REPLACE INTO chatbg(user_id,data,upd) VALUES(?,?,?)').run(u.id, a, n); await q('UPDATE users SET bgupd=? WHERE id=?').run(n, u.id); }
+    else { await q('DELETE FROM chatbg WHERE user_id=?').run(u.id); await q('UPDATE users SET bgupd=0 WHERE id=?').run(u.id); }
+    return send(res, 200, { user: me(await q('SELECT * FROM users WHERE id=?').get(u.id)) });
+  }
+  if (key === 'GET /api/me/chatbg') {
+    const d = await q('SELECT data FROM chatbg WHERE user_id=?').get(u.id), mt = d && MEDIA_IMG.exec(d.data); if (!mt) return fail(res, 404, 'Topilmadi.');
+    const buf = Buffer.from(mt[2], 'base64'); res.writeHead(200, { 'content-type': mt[1], 'cache-control': 'private, max-age=31536000, immutable', 'content-length': buf.length }); return res.end(buf);
+  }
+  if (key === 'PUT /api/me/badge') {
+    if (!(u.premium_until > Date.now())) return fail(res, 403, 'Nik belgisi — Premium imkoniyati.');
+    const b = await readBody(req, 300000); let badge = '';
+    if (b.logo) { if (!/^b[1-7]$/.test(String(b.logo))) return fail(res, 400, 'Belgi topilmadi.'); badge = 'l:' + b.logo; }
+    else if (b.emoji) { const e = String(b.emoji).trim(); if (e.length > 16 || !/^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D|[\u{1F1E6}-\u{1F1FF}])+$/u.test(e)) return fail(res, 400, 'Faqat emoji kiriting.'); badge = 'e:' + e; }
+    else if (b.image) { const a = String(b.image); if (!(MEDIA_IMG.test(a) && a.length * 0.75 <= 60000)) return fail(res, 400, 'Rasm noto’g’ri yoki juda katta.'); const n = Date.now(); await q('INSERT OR REPLACE INTO badges(user_id,data,upd) VALUES(?,?,?)').run(u.id, a, n); badge = 'i:' + n; }
+    await q('UPDATE users SET badge=? WHERE id=?').run(badge, u.id); bcast(u.id);
+    return send(res, 200, { user: me(await q('SELECT * FROM users WHERE id=?').get(u.id)) });
+  }
+  const bd = /^GET \/api\/users\/(\d+)\/badge$/.exec(key);
+  if (bd) {
+    const d = await q('SELECT data FROM badges WHERE user_id=?').get(Number(bd[1])), mt = d && MEDIA_IMG.exec(d.data); if (!mt) return fail(res, 404, 'Topilmadi.');
+    const buf = Buffer.from(mt[2], 'base64'); res.writeHead(200, { 'content-type': mt[1], 'cache-control': 'private, max-age=31536000, immutable', 'content-length': buf.length }); return res.end(buf);
+  }
+  const tr = /^POST \/api\/media\/(\d+)\/transcribe$/.exec(key);
+  if (tr) {
+    if (!(u.premium_until > Date.now())) return fail(res, 403, 'Ovozni matnga aylantirish — Premium imkoniyati.');
+    if (limited('tr' + u.id, 15, 60000)) return fail(res, 429, 'Juda tez. Biroz kuting.');
+    const id = Number(tr[1]); if (!await canSeeMedia(id, u.id)) return fail(res, 404, 'Topilmadi.');
+    const md = await q('SELECT mime,data,kind FROM media WHERE id=?').get(id); if (!md || md.kind !== 'voice') return fail(res, 404, 'Ovozli xabar topilmadi.');
+    const old = await q(`SELECT vtext FROM (SELECT vtext FROM messages WHERE media_id=? UNION ALL SELECT vtext FROM cmsgs WHERE media_id=? UNION ALL SELECT vtext FROM saved WHERE media_id=?) WHERE vtext IS NOT NULL AND vtext!='' LIMIT 1`).get(id, id, id);
+    if (old) return send(res, 200, { text: old.vtext });
+    const HF = process.env.HF_TOKEN; if (!HF) return fail(res, 501, 'Matnga aylantirish hali sozlanmagan (HF_TOKEN kerak).');
+    const mt = MEDIA_AUD.exec(md.data) || [null, md.mime, md.data.split(',')[1] || ''];
+    const buf = Buffer.from(mt[2], 'base64');
+    let text = '';
+    try {
+      const r = await fetch(process.env.HF_URL || `https://router.huggingface.co/hf-inference/models/${process.env.HF_MODEL || 'openai/whisper-large-v3'}`, { method: 'POST', headers: { authorization: 'Bearer ' + HF, 'content-type': mt[1] }, body: buf, signal: AbortSignal.timeout(90000) });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 503) return fail(res, 503, 'Model yuklanmoqda. Yarim daqiqadan keyin qayta urinib ko’ring.');
+      if (!r.ok) { console.error('HF', r.status, JSON.stringify(j).slice(0, 200)); return fail(res, 502, 'Matnga aylantirib bo’lmadi. Keyinroq urinib ko’ring.'); }
+      text = String(j.text || '').trim();
+    } catch (e) { console.error('HF', e.message); return fail(res, 502, 'Matnga aylantirib bo’lmadi. Keyinroq urinib ko’ring.'); }
+    if (!text) text = '(ovoz tushunarsiz yoki jim)';
+    for (const t of ['messages', 'cmsgs', 'saved']) await q(`UPDATE ${t} SET vtext=? WHERE media_id=?`).run(text.slice(0, 2000), id);
+    return send(res, 200, { text });
+  }
 
   // ---------- sovg'alar, Stars daftari, savdo ----------
   if (url.pathname.startsWith('/api/gifts') || key === 'GET /api/stars/ledger') {
