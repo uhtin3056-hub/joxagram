@@ -68,16 +68,24 @@ for (const st of [
   `CREATE TABLE IF NOT EXISTS media(id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, size INTEGER NOT NULL, dur INTEGER DEFAULT 0, created INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS ix_media_o ON media(owner_id)`,
   `CREATE TABLE IF NOT EXISTS avatars(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, upd INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS stars_ledger(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, delta REAL NOT NULL, balance REAL NOT NULL, reason TEXT NOT NULL, ref TEXT DEFAULT '', created INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS ledger_u ON stars_ledger(user_id,id)`,
+  `CREATE TABLE IF NOT EXISTS gifts_owned(id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, gift INTEGER NOT NULL, price REAL NOT NULL, from_id INTEGER NOT NULL, hidden INTEGER DEFAULT 0, sold INTEGER DEFAULT 0, created INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS gifts_o ON gifts_owned(owner_id,sold)`,
+  `CREATE TABLE IF NOT EXISTS chat_clear(user_id INTEGER NOT NULL, peer_id INTEGER NOT NULL, upto INTEGER NOT NULL, PRIMARY KEY(user_id,peer_id))`,
+  `CREATE TABLE IF NOT EXISTS gprice(gift INTEGER NOT NULL, slot INTEGER NOT NULL, price REAL NOT NULL, PRIMARY KEY(gift,slot))`,
 ]) await db.exec(st);
 for (const st of [
   `ALTER TABLE messages ADD COLUMN kind TEXT DEFAULT ''`, `ALTER TABLE messages ADD COLUMN media_id INTEGER DEFAULT 0`, `ALTER TABLE messages ADD COLUMN vtext TEXT DEFAULT ''`,
   `ALTER TABLE cmsgs ADD COLUMN kind TEXT DEFAULT ''`, `ALTER TABLE cmsgs ADD COLUMN media_id INTEGER DEFAULT 0`, `ALTER TABLE cmsgs ADD COLUMN vtext TEXT DEFAULT ''`,
   `ALTER TABLE users ADD COLUMN aupd INTEGER DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN gcol TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN gl TEXT DEFAULT '[]'`, `ALTER TABLE users ADD COLUMN gsel INTEGER DEFAULT 0`,
+  `ALTER TABLE messages ADD COLUMN gift INTEGER`,
 ]) { try { await db.exec(st); } catch (e) { if (!/duplicate column/i.test(e.message)) throw e; } }
 
 // ---------- yordamchilar ----------
 const send = (res, code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
-const fail = (res, code, msg) => send(res, code, { error: msg });
+const fail = (res, code, msg, extra) => send(res, code, { error: msg, ...extra });
 const readBody = (req, max = 65536) => new Promise((ok, no) => {
   let n = 0, over = false; const ch = [];
   req.on('data', (c) => { n += c.length; if (n > max) { if (!over) { over = true; no(new Error('big')); } } else ch.push(c); });
@@ -95,12 +103,98 @@ const nameErr = (u) => !UNAME.test(u) ? 'Username faqat lotin harflari (a–z) v
 const eq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const hashPw = async (pw, salt) => (await scrypt(pw, salt, 64)).toString('hex');
 const validBirth = (s) => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s); if (!m) return false; const d = +m[1], mo = +m[2], y = +m[3], t = new Date(y, mo - 1, d); return t.getFullYear() === y && t.getMonth() === mo - 1 && t.getDate() === d && y >= 1900 && t <= new Date(); };
-const pub = (u) => ({ id: u.id, username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin, ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
+const pub = (u) => ({ id: u.id, username: u.username, name: u.name, premium: u.premium_until > Date.now(), adm: !!u.is_admin, gc: u.gcol || '', gl: (() => { try { return JSON.parse(u.gl || '[]'); } catch { return []; } })(), ava: u.aupd ? `/api/users/${u.id}/avatar?v=${u.aupd}` : '' });
 const me = (u) => ({ ...pub(u), bio: u.bio, birth: u.birth, stars: u.stars, premium_until: u.premium_until, is_admin: !!u.is_admin });
 const blocked = async (a, b) => !!await q('SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?)').get(a, b, b, a);
 const userBy = async (name) => await q('SELECT * FROM users WHERE username=?').get(String(name || '').toLowerCase());
 const taken = async (un) => !!(await userBy(un) || await q('SELECT 1 FROM channels WHERE username=?').get(un));
-const msgOut = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, created: m.created, edited: !!m.edited, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '' });
+
+// ---------- sovg'alar katalogi va narxlar (serverda) ----------
+const CAT = [
+  { n: 'Yashil omad', p: 4300, c: '#5db06a' }, { n: 'Jigarrang omad', p: 350, c: '#865546' }, { n: 'Bunny Muffin', p: 12000, c: '#cc6b83' }, { n: 'Fen', p: 1000, c: '#181818' },
+  { n: 'Gul dastasi', p: 50, c: '#101010' }, { n: 'Kepka', p: 120, c: '#908d87' }, { n: 'Qurbaqa', p: 1000, c: '#354056' }, { n: 'Olovrang uzuk', p: 700, c: '#ba8b31' },
+  { n: 'Yashil uzuk', p: 700, c: '#519d55' }, { n: 'Qora tuynuk uzugi', p: 17000, c: '#161817' }, { n: 'Kristall', p: 28000, c: '#8e4890' }, { n: 'Axlat', p: 120, c: '#161616' },
+  { n: 'Tort', p: 50, c: '#181818' }, { n: 'Yurak', p: 15, c: '#ffffff' }, { n: 'Brilliant uzuk', p: 100, c: '#181818' },
+  { n: 'Qora ilon', p: 5000, c: '#8f854a', nft: 1, tag: '' },
+  { n: 'Qizil 19', p: 10000, c: '#90864a', nft: 1, tag: '' },
+  { n: 'Qora to‘p', p: 10000, c: '#90854a', nft: 1, tag: '' },
+  { n: 'Katta ko‘z', p: 7777, c: '#90854a', nft: 1, tag: '' },
+  { n: 'Qor paypoq', p: 7777, c: '#8f854a', nft: 1, tag: '' },
+  { n: 'Qora tort', p: 6666, c: '#8f854a', nft: 1, tag: '' },
+  { n: 'Tuxum agent 1', p: 4242, c: '#8f854a', nft: 1, tag: '' },
+  { n: 'Tuxum agent 2', p: 4242, c: '#90854b', nft: 1, tag: '' },
+  { n: 'Tuxum agent 3', p: 4242, c: '#8f8549', nft: 1, tag: '' },
+  { n: 'Oynali yurak', p: 6666, c: '#8f854a', nft: 1, tag: '' },
+  { n: 'Uzukli quti', p: 44444, c: '#90854a', nft: 1, tag: '' },
+  { n: 'Kumush yurak', p: 6666, c: '#8f8449', nft: 1, tag: '' },
+  { n: 'Qizil bantik', p: 7777, c: '#8d8349', nft: 1, tag: '' },
+  { n: 'Kumush bant', p: 8888, c: '#8e844a', nft: 1, tag: '' },
+  { n: 'Iblis lolipopi', p: 8888, c: '#8d8349', nft: 1, tag: '' },
+  { n: 'Oltin shar', p: 12000, c: '#9d8c72', nft: 1, tag: '#4 346' },
+  { n: 'Oltin nishon', p: 15000, c: '#9e8c73', nft: 1, tag: '#96' },
+  { n: 'Oltin mushuk', p: 9000, c: '#9d8d73', nft: 1, tag: '#13 681' },
+  { n: 'Oltin soat', p: 18000, c: '#9d8c72', nft: 1, tag: '#16 916' },
+  { n: 'Oltin atirgul', p: 25000, c: '#9e8c73', nft: 1, tag: '#1 684' },
+  { n: 'Sehrli chiroq', p: 11000, c: '#9d8c72', nft: 1, tag: '#5 115' },
+  { n: 'Oltin taqvim', p: 3000, c: '#9d8d72', nft: 1, tag: '1/323.8K' },
+  { n: 'Suyak guli', p: 6000, c: '#9e8c73', nft: 1, tag: '1/20.1K' },
+  { n: 'Oltin qo‘lqop', p: 4000, c: '#9d8d73', nft: 1, tag: '1/28.2K' },
+  { n: 'Yashil dubulg‘a', p: 7307, c: '#e4a4ff', nft: 1, tag: '#12 751' },
+  { n: 'To‘q sariq dubulg‘a', p: 11000, c: '#b279fd', nft: 1, tag: '#4 357' },
+  { n: 'Oltin mushuk dubulg‘a', p: 11481, c: '#b77dfe', nft: 1, tag: '#2 933' },
+  { n: 'Qizil poyga dubulg‘asi', p: 12525, c: '#cd92ff', nft: 1, tag: '#11 252' },
+  { n: 'Kumush mushuk dubulg‘a', p: 13333, c: '#9e68e7', nft: 1, tag: '#3 691' },
+  { n: 'Ayiqcha dubulg‘a', p: 14613, c: '#9f69e9', nft: 1, tag: '#6 680' },
+  { n: 'Oq mushuk dubulg‘a', p: 14980, c: '#e1a2ff', nft: 1, tag: '#12 354' },
+  { n: 'Qulupnay dubulg‘a', p: 16701, c: '#ae77f9', nft: 1, tag: '#3 210' },
+  { n: 'Pushti dubulg‘a', p: 22222, c: '#b27afd', nft: 1, tag: '#12 626' },
+];
+const PRICE_STEP = Number(process.env.PRICE_STEP_MS) || 3600000;
+const r2 = (x) => Math.round(x * 100) / 100;
+let lastSlot = 0, ticking = null;
+async function tickPrices() {
+  const slot = Math.floor(Date.now() / PRICE_STEP); if (slot === lastSlot) return;
+  if (ticking) return ticking;
+  ticking = (async () => {
+    for (let i = 0; i < CAT.length; i++) {
+      const b = CAT[i].p, last = await q('SELECT slot,price FROM gprice WHERE gift=? ORDER BY slot DESC LIMIT 1').get(i);
+      let from, p;
+      if (!last) { await q('INSERT OR IGNORE INTO gprice(gift,slot,price) VALUES(?,?,?)').run(i, slot, b); continue; }
+      from = last.slot + 1; p = last.price;
+      if (slot - from > 24 * 30) from = slot - 24 * 30;
+      for (let k = from; k <= slot; k++) {
+        const up = crypto.randomInt(0, 100) < 30, d = crypto.randomInt(0, 1501) / 10000; // 0..15%
+        p = Math.min(b * 2.5, Math.max(b * 0.4, p * (up ? 1 + d : 1 - d))); p = r2(p);
+        await q('INSERT OR IGNORE INTO gprice(gift,slot,price) VALUES(?,?,?)').run(i, k, p);
+      }
+    }
+    lastSlot = slot;
+  })().finally(() => { ticking = null; });
+  return ticking;
+}
+async function curPrices() {
+  const rows = await q('SELECT g.gift,g.price FROM gprice g JOIN (SELECT gift,MAX(slot) s FROM gprice GROUP BY gift) m ON m.gift=g.gift AND m.s=g.slot').all(), o = {};
+  for (const r of rows) o[r.gift] = r.price; for (let i = 0; i < CAT.length; i++) if (o[i] == null) o[i] = CAT[i].p; return o;
+}
+async function giftList() {
+  const out = [];
+  for (let i = 0; i < CAT.length; i++) {
+    const h = (await q('SELECT price FROM gprice WHERE gift=? ORDER BY slot DESC LIMIT 25').all(i)).map((x) => x.price).reverse(), n = h.length, cur = n ? h[n - 1] : CAT[i].p;
+    out.push({ id: i, name: CAT[i].n, base: CAT[i].p, color: CAT[i].c, nft: !!CAT[i].nft, tag: CAT[i].tag || '', price: cur, change: n > 1 ? r2((h[n - 1] / h[n - 2] - 1) * 100) : 0, hist: h });
+  }
+  return out;
+}
+async function ledger(uid, delta, reason, ref) {
+  const b = await q('SELECT stars FROM users WHERE id=?').get(uid);
+  await q('INSERT INTO stars_ledger(user_id,delta,balance,reason,ref,created) VALUES(?,?,?,?,?,?)').run(uid, delta, b ? b.stars : 0, reason, ref || '', Date.now());
+}
+async function refreshGifts(uid) {
+  const rows = await q('SELECT id,gift FROM gifts_owned WHERE owner_id=? AND sold=0 AND hidden=0 ORDER BY id').all(uid), us = await q('SELECT gsel FROM users WHERE id=?').get(uid);
+  const sel = rows.find((r) => r.id === us.gsel) || rows[rows.length - 1];
+  await q('UPDATE users SET gcol=?,gl=?,gsel=? WHERE id=?').run(sel ? CAT[sel.gift].c : '', JSON.stringify(rows.slice(-30).map((r) => r.gift)), sel ? sel.id : 0, uid);
+  bcast(uid);
+}
+const msgOut = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, created: m.created, edited: !!m.edited, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '', gift: m.gift == null ? null : m.gift });
 const kindLabel = (m) => m.text || (m.kind === 'img' ? '[rasm]' : m.kind === 'voice' ? '[ovozli xabar]' : '');
 
 async function auth(req) {
@@ -119,6 +213,9 @@ async function login(req, res, uid) {
 // ---------- real vaqt (SSE) ----------
 const streams = new Map();
 const push = (uid, event, data) => { for (const r of streams.get(uid) || []) r.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+// profil o’zgarsa (rasm, ism, sovg’a rangi...) ulangan hamma odamga xabar beramiz
+const adminMsg = async (u, p, text) => { if (!p || p.id === u.id) return; const r = await q('INSERT INTO messages(from_id,to_id,text,created) VALUES(?,?,?,?)').run(u.id, p.id, text, Date.now()); const m = msgOut(await q('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid)); push(p.id, 'message', { message: m, from: pub(u) }); push(u.id, 'message', { message: m, from: pub(p) }); };
+const bcast = async (uid) => { try { const x = await q('SELECT * FROM users WHERE id=?').get(uid); if (x) for (const id of streams.keys()) push(id, 'profile', { user: pub(x) }); } catch {} };
 setInterval(() => { for (const set of streams.values()) for (const r of set) r.write(': ping\n\n'); }, 25000).unref();
 
 // ---------- kanal va guruhlar: yordamchilar ----------
@@ -161,6 +258,7 @@ async function canSeeMedia(id, uid) {
 }
 async function sweepMedia() { try { await q('DELETE FROM media WHERE created<? AND id NOT IN (SELECT media_id FROM messages WHERE media_id>0) AND id NOT IN (SELECT media_id FROM cmsgs WHERE media_id>0)').run(Date.now() - DAY); } catch (e) { console.error(e); } }
 sweepMedia(); setInterval(sweepMedia, 3600000).unref();
+tickPrices().catch((e) => console.error('tick', e.message)); setInterval(() => tickPrices().catch(() => {}), Math.min(PRICE_STEP, 60000)).unref();
 function sendBinary(req, res, mime, buf) {
   const h = { 'content-type': mime, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=31536000, immutable' }, rg = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
   if (rg && (rg[1] || rg[2])) {
@@ -212,6 +310,7 @@ async function api(req, res, url) {
     }
     try { await q('UPDATE users SET name=?,bio=?,birth=?,username=? WHERE id=?').run(name, bio, birth, un, u.id); }
     catch (e) { if (/UNIQUE/i.test(e.message)) return fail(res, 409, 'Bu username band.'); throw e; }
+    bcast(u.id);
     return send(res, 200, { user: me(await q('SELECT * FROM users WHERE id=?').get(u.id)) });
   }
   if (key === 'GET /api/users') {
@@ -224,17 +323,30 @@ async function api(req, res, url) {
     return send(res, 200, { users: rows.map(pub), channels: chs.map((c) => ({ id: c.id, username: c.username, name: c.name, descr: c.descr, count: c.cnt, ava: c.hasava ? `/api/channels/${c.id}/avatar?v=${c.upd}` : '' })) });
   }
   if (key === 'GET /api/chats') {
-    const rows = await q(`SELECT x.id uid,x.username,x.name,x.premium_until,x.aupd,m.id mid,m.text,m.kind,m.created,m.from_id FROM messages m
+    const rows = await q(`SELECT x.id uid,x.username,x.name,x.premium_until,x.aupd,x.is_admin,x.gcol,x.gl,m.id mid,m.text,m.kind,m.created,m.from_id FROM messages m
       JOIN users x ON x.id=CASE WHEN m.from_id=? THEN m.to_id ELSE m.from_id END
       WHERE m.id IN (SELECT MAX(id) FROM messages WHERE from_id=? OR to_id=? GROUP BY CASE WHEN from_id=? THEN to_id ELSE from_id END)
-      AND x.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?) ORDER BY m.id DESC`).all(u.id, u.id, u.id, u.id, u.id);
-    return send(res, 200, { chats: rows.map((r) => ({ user: pub({ id: r.uid, username: r.username, name: r.name, premium_until: r.premium_until, aupd: r.aupd }), last: { id: r.mid, text: r.text, kind: r.kind || '', created: r.created, mine: r.from_id === u.id } })) });
+      AND m.id>COALESCE((SELECT upto FROM chat_clear WHERE user_id=? AND peer_id=x.id),0)
+      AND x.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?) ORDER BY m.id DESC`).all(u.id, u.id, u.id, u.id, u.id, u.id);
+    return send(res, 200, { chats: rows.map((r) => ({ user: pub({ id: r.uid, username: r.username, name: r.name, premium_until: r.premium_until, aupd: r.aupd, is_admin: r.is_admin, gcol: r.gcol, gl: r.gl }), last: { id: r.mid, text: r.text, kind: r.kind || '', created: r.created, mine: r.from_id === u.id } })) });
   }
   if (key === 'GET /api/messages') {
     const p = await userBy(url.searchParams.get('with')); if (!p) return fail(res, 404, 'Foydalanuvchi topilmadi.');
     const before = Number(url.searchParams.get('before')) || 9e15;
-    const rows = await q('SELECT * FROM messages WHERE ((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND id<? ORDER BY id DESC LIMIT 50').all(u.id, p.id, p.id, u.id, before);
+    const cl = await q('SELECT upto FROM chat_clear WHERE user_id=? AND peer_id=?').get(u.id, p.id);
+    const rows = await q('SELECT * FROM messages WHERE ((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND id<? AND id>? ORDER BY id DESC LIMIT 50').all(u.id, p.id, p.id, u.id, before, cl ? cl.upto : 0);
     return send(res, 200, { user: pub(p), messages: rows.reverse().map(msgOut) });
+  }
+  if (key === 'POST /api/chats/clear') {
+    const b = await readBody(req), names = [].concat(b.users || []).slice(0, 200);
+    for (const nm of names) {
+      const p = await userBy(nm); if (!p || p.id === u.id) continue;
+      const mx = await q('SELECT MAX(id) m FROM messages WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=?)').get(u.id, p.id, p.id, u.id);
+      if (!mx || !mx.m) continue;
+      await q('INSERT INTO chat_clear(user_id,peer_id,upto) VALUES(?,?,?) ON CONFLICT(user_id,peer_id) DO UPDATE SET upto=excluded.upto').run(u.id, p.id, mx.m);
+      if (b.both) { await q('DELETE FROM messages WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=?)').run(u.id, p.id, p.id, u.id); push(p.id, 'chatclear', { user: u.id }); }
+    }
+    return send(res, 200, { ok: true });
   }
   if (key === 'POST /api/messages') {
     if (limited('msg' + u.id, 60, 60000)) return fail(res, 429, 'Juda tez yozyapsiz.');
@@ -303,6 +415,7 @@ async function api(req, res, url) {
     if (a && !(MEDIA_IMG.test(a) && a.length * 0.75 <= 150000)) return fail(res, 400, 'Rasm noto’g’ri yoki juda katta.');
     if (a) { await q('INSERT OR REPLACE INTO avatars(user_id,data,upd) VALUES(?,?,?)').run(u.id, a, Date.now()); await q('UPDATE users SET aupd=? WHERE id=?').run(Date.now(), u.id); }
     else { await q('DELETE FROM avatars WHERE user_id=?').run(u.id); await q('UPDATE users SET aupd=0 WHERE id=?').run(u.id); }
+    bcast(u.id);
     return send(res, 200, { user: me(await q('SELECT * FROM users WHERE id=?').get(u.id)) });
   }
   mx2 = /^GET \/api\/users\/(\d+)\/avatar$/.exec(key);
@@ -475,6 +588,73 @@ async function api(req, res, url) {
     return fail(res, 404, 'Topilmadi.');
   }
 
+
+  // ---------- sovg'alar, Stars daftari, savdo ----------
+  if (url.pathname.startsWith('/api/gifts') || key === 'GET /api/stars/ledger') {
+    await tickPrices();
+    if (key === 'GET /api/stars/ledger') {
+      const rows = await q('SELECT delta,balance,reason,ref,created FROM stars_ledger WHERE user_id=? ORDER BY id DESC LIMIT 50').all(u.id);
+      return send(res, 200, { stars: (await q('SELECT stars FROM users WHERE id=?').get(u.id)).stars, ledger: rows });
+    }
+    if (key === 'GET /api/gifts') return send(res, 200, { gifts: await giftList(), step: PRICE_STEP });
+    if (key === 'GET /api/gifts/mine') {
+      const rows = await q('SELECT id,gift,hidden FROM gifts_owned WHERE owner_id=? AND sold=0 ORDER BY id').all(u.id), pr = await curPrices(), uu = await q('SELECT gsel FROM users WHERE id=?').get(u.id);
+      return send(res, 200, { gifts: rows.map((r) => ({ id: r.id, gift: r.gift, hidden: !!r.hidden, price: pr[r.gift] })), selected: uu.gsel });
+    }
+    if (key === 'POST /api/gifts/buy') {
+      if (limited('gb' + u.id, 30, 60000)) return fail(res, 429, 'Juda tez. Biroz kuting.');
+      const b = await readBody(req), gi = Number(b.gift);
+      if (!Number.isInteger(gi) || !CAT[gi]) return fail(res, 400, 'Sovg’a topilmadi.');
+      let to = u; if (b.to) { to = await userBy(b.to); if (!to) return fail(res, 404, 'Foydalanuvchi topilmadi.'); }
+      if (to.id !== u.id && await blocked(u.id, to.id)) return fail(res, 403, 'Bu foydalanuvchiga sovg’a yuborib bo’lmaydi.');
+      const price = (await curPrices())[gi];
+      if (b.expect != null && Math.abs(Number(b.expect) - price) > 0.005) return fail(res, 409, 'Narx o’zgardi: ★ ' + price + '. Qayta urinib ko’ring.', { price });
+      // 1-qadam: Stars'ni bitta shartli buyruq bilan yechamiz (yetmasa 0 qator o’zgaradi)
+      const dd = await q('UPDATE users SET stars=ROUND(stars-?,2) WHERE id=? AND stars>=?').run(price, u.id, price);
+      if (dd.changes !== 1) return fail(res, 402, 'Stars yetarli emas.');
+      let gid, msg = null;
+      try {
+        const now = Date.now();
+        await ledger(u.id, -price, 'gift_buy', CAT[gi].n + (to.id !== u.id ? ' → @' + to.username : ''));
+        gid = (await q('INSERT INTO gifts_owned(owner_id,gift,price,from_id,created) VALUES(?,?,?,?,?)').run(to.id, gi, price, u.id, now)).lastInsertRowid;
+        await refreshGifts(to.id);
+        if (to.id !== u.id) {
+          const r = await q('INSERT INTO messages(from_id,to_id,text,created,kind,gift) VALUES(?,?,?,?,?,?)').run(u.id, to.id, '🎁 ' + CAT[gi].n + ' sovg’a qilindi (★ ' + price + ')', now, 'gift', gi);
+          msg = msgOut(await q('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid));
+        }
+      } catch (e) {
+        await q('UPDATE users SET stars=ROUND(stars+?,2) WHERE id=?').run(price, u.id); await ledger(u.id, price, 'refund', 'sovg’a xatosi').catch(() => {});
+        if (gid) await q('UPDATE gifts_owned SET sold=1 WHERE id=?').run(gid).catch(() => {});
+        console.error('gift buy', e.message); return fail(res, 500, 'Xatolik. Stars qaytarildi.');
+      }
+      const uu = await q('SELECT * FROM users WHERE id=?').get(u.id), tt = await q('SELECT * FROM users WHERE id=?').get(to.id);
+      if (msg) { push(to.id, 'message', { message: msg, from: pub(uu) }); push(u.id, 'message', { message: msg, from: pub(uu) }); }
+      push(to.id, 'gift', { id: gid }); 
+      return send(res, 201, { id: gid, price, stars: uu.stars, to: pub(tt), message: msg });
+    }
+    const gm2 = /^(PATCH|POST) \/api\/gifts\/(\d+)(\/sell)?$/.exec(key);
+    if (gm2) {
+      const gid = Number(gm2[2]), row = await q('SELECT * FROM gifts_owned WHERE id=? AND owner_id=? AND sold=0').get(gid, u.id);
+      if (!row) return fail(res, 404, 'Sovg’a topilmadi.');
+      if (gm2[3]) { // sotish: avval "sotildi" deb belgilaymiz (faqat bir marta o’tadi), keyin Stars qo’shamiz
+        const price = (await curPrices())[row.gift];
+        const r = await q('UPDATE gifts_owned SET sold=1 WHERE id=? AND owner_id=? AND sold=0').run(gid, u.id);
+        if (r.changes !== 1) return fail(res, 409, 'Sovg’a allaqachon sotilgan.');
+        await q('UPDATE users SET stars=ROUND(stars+?,2) WHERE id=?').run(price, u.id);
+        await ledger(u.id, price, 'gift_sell', CAT[row.gift].n);
+        await refreshGifts(u.id);
+        return send(res, 200, { price, stars: (await q('SELECT stars FROM users WHERE id=?').get(u.id)).stars });
+      }
+      const b = await readBody(req);
+      if (b.hidden != null) await q('UPDATE gifts_owned SET hidden=? WHERE id=?').run(b.hidden ? 1 : 0, gid);
+      if (b.select) { await q('UPDATE gifts_owned SET hidden=0 WHERE id=?').run(gid); await q('UPDATE users SET gsel=? WHERE id=?').run(gid, u.id); }
+      await refreshGifts(u.id);
+      const uu = await q('SELECT * FROM users WHERE id=?').get(u.id);
+      return send(res, 200, { user: me(uu), selected: uu.gsel });
+    }
+    return fail(res, 404, 'Topilmadi.');
+  }
+
   // ---------- admin ----------
   if (url.pathname.startsWith('/api/admin/')) {
     if (!u.is_admin) return fail(res, 403, 'Ruxsat yo’q.');
@@ -482,16 +662,20 @@ async function api(req, res, url) {
       const rows = await q('SELECT r.*,a.username rn,b.username dn FROM reports r JOIN users a ON a.id=r.reporter_id JOIN users b ON b.id=r.reported_id ORDER BY r.id DESC LIMIT 100').all();
       return send(res, 200, { reports: rows.map((r) => ({ id: r.id, reporter: r.rn, reported: r.dn, created: r.created, status: r.status, messages: JSON.parse(r.snapshot) })) });
     }
+    if (key === 'GET /api/admin/user') {
+      const p = await userBy(String(url.searchParams.get('username') || '').replace('@', '').trim()); if (!p) return fail(res, 404, 'Bunday foydalanuvchi topilmadi.');
+      return send(res, 200, { user: { username: p.username, name: p.name, stars: p.stars, premium_until: p.premium_until, ava: pub(p).ava } });
+    }
     if (key === 'POST /api/admin/stars') {
-      const b = await readBody(req), p = await userBy(b.username), d = Number(b.delta);
+      const b = await readBody(req), p = await userBy(String(b.username || '').replace('@', '').trim()), d = Number(b.delta);
       if (!p || !Number.isFinite(d) || Math.abs(d) > 1e7) return fail(res, 400, 'Noto’g’ri so’rov.');
-      await q('UPDATE users SET stars=MAX(0,ROUND(stars+?,2)) WHERE id=?').run(d, p.id); return send(res, 200, { stars: (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars });
+      const before = p.stars; await q('UPDATE users SET stars=MAX(0,ROUND(stars+?,2)) WHERE id=?').run(d, p.id); const after = (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars; await ledger(p.id, Math.round((after - before) * 100) / 100, 'admin', 'by @' + u.username); if (after > before) await adminMsg(u, p, '✅ Buyurtmangiz tushdi: ★ ' + (Math.round((after - before) * 100) / 100) + ' Stars hisobingizga qo’shildi.'); return send(res, 200, { stars: (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars });
     }
     if (key === 'POST /api/admin/premium') {
-      const b = await readBody(req), p = await userBy(b.username), days = Number(b.days);
+      const b = await readBody(req), p = await userBy(String(b.username || '').replace('@', '').trim()), PLANS = { '1m': [30, '1 oylik'], '3m': [90, '3 oylik'], '1y': [365, '1 yillik'] }, pl = PLANS[b.plan], days = pl ? pl[0] : Number(b.days);
       if (!p || !Number.isFinite(days) || days < 0 || days > 3660) return fail(res, 400, 'Noto’g’ri so’rov.');
       const until = days === 0 ? 0 : Math.max(Date.now(), p.premium_until) + days * DAY;
-      await q('UPDATE users SET premium_until=? WHERE id=?').run(until, p.id); return send(res, 200, { premium_until: until });
+      await q('UPDATE users SET premium_until=? WHERE id=?').run(until, p.id); bcast(p.id); if (days > 0) await adminMsg(u, p, '✅ Buyurtmangiz tushdi: Premium ' + (pl ? pl[1] : days + ' kunlik') + ' faollashtirildi. Rahmat!'); return send(res, 200, { premium_until: until });
     }
   }
   return fail(res, 404, 'Topilmadi.');
