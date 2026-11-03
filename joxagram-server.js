@@ -705,7 +705,7 @@ async function api(req, res, url) {
       let to = u; if (b.to) { to = await userBy(b.to); if (!to) return fail(res, 404, 'Foydalanuvchi topilmadi.'); }
       if (to.id !== u.id && await blocked(u.id, to.id)) return fail(res, 403, 'Bu foydalanuvchiga sovg’a yuborib bo’lmaydi.');
       const price = (await curPrices())[gi];
-      if (b.expect != null && Math.abs(Number(b.expect) - price) > 0.005) return fail(res, 409, 'Narx o’zgardi: ★ ' + price + '. Qayta urinib ko’ring.', { price });
+      if (b.expect != null && Math.abs(Number(b.expect) - price) > 1) return fail(res, 409, 'Narx o’zgardi: ★ ' + price + '. Qayta urinib ko’ring.', { price });
       // 1-qadam: Stars'ni bitta shartli buyruq bilan yechamiz (yetmasa 0 qator o’zgaradi)
       const dd = await q('UPDATE users SET stars=ROUND(stars-?,0) WHERE id=? AND stars>=?').run(price, u.id, price);
       if (dd.changes !== 1) return fail(res, 402, 'Stars yetarli emas.');
