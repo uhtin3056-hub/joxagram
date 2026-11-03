@@ -703,7 +703,7 @@ async function api(req, res, url) {
       const b = await readBody(req), gi = Number(b.gift);
       if (!Number.isInteger(gi) || !CAT[gi]) return fail(res, 400, 'Sovg’a topilmadi.');
       let to = u; if (b.to) { to = await userBy(b.to); if (!to) return fail(res, 404, 'Foydalanuvchi topilmadi.'); }
-      if (to.id !== u.id && await blocked(u.id, to.id)) return fail(res, 403, 'Bu foydalanuvchiga sovg’a yuborib bo’lmaydi.');
+      if (to.id !== u.id && await blocked(u.id, to.id)) { const mine = await q('SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=?').get(u.id, to.id); return fail(res, 403, mine ? 'Siz bu foydalanuvchini bloklagansiz. Avval blokdan chiqaring (Kontaktlar → ➕ → Bloklanganlar).' : 'Bu foydalanuvchi sizni bloklagan. Unga sovg’a yuborib bo’lmaydi.'); }
       const price = (await curPrices())[gi];
       if (b.expect != null && Math.abs(Number(b.expect) - price) > 1) return fail(res, 409, 'Narx o’zgardi: ★ ' + price + '. Qayta urinib ko’ring.', { price });
       // 1-qadam: Stars'ni bitta shartli buyruq bilan yechamiz (yetmasa 0 qator o’zgaradi)
@@ -761,7 +761,8 @@ async function api(req, res, url) {
     }
     if (key === 'GET /api/admin/user') {
       const p = await userBy(String(url.searchParams.get('username') || '').replace('@', '').trim()); if (!p) return fail(res, 404, 'Bunday foydalanuvchi topilmadi.');
-      return send(res, 200, { user: { username: p.username, name: p.name, stars: p.stars, premium_until: p.premium_until, ava: pub(p).ava } });
+      const bBy = (await q('SELECT x.username FROM blocks b JOIN users x ON x.id=b.blocked_id WHERE b.blocker_id=?').all(p.id)).map((r) => r.username), bOf = (await q('SELECT x.username FROM blocks b JOIN users x ON x.id=b.blocker_id WHERE b.blocked_id=?').all(p.id)).map((r) => r.username);
+      return send(res, 200, { user: { username: p.username, name: p.name, stars: p.stars, premium_until: p.premium_until, ava: pub(p).ava, blocked_by_me: bBy, blocked_me: bOf } });
     }
     if (key === 'POST /api/admin/stars') {
       const b = await readBody(req), p = await userBy(String(b.username || '').replace('@', '').trim()), d = Number(b.delta);
