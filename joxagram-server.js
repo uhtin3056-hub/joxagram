@@ -88,6 +88,8 @@ for (const st of [
   `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN ahide INTEGER DEFAULT 0`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
 ]) { try { await db.exec(st); } catch (e) { if (!/duplicate|already|exists/i.test(e.message)) console.error('migratsiya:', st.slice(0, 60), e.message); } }
 
+try { await db.exec(`UPDATE users SET stars=ROUND(stars) WHERE stars<>ROUND(stars)`); } catch (e) { console.error('stars migratsiya:', e.message); }
+
 // ---------- yordamchilar ----------
 const send = (res, code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
 const fail = (res, code, msg, extra) => send(res, code, { error: msg, ...extra });
@@ -156,7 +158,7 @@ const CAT = [
   { n: 'Pushti dubulg‘a', p: 22222, c: '#b27afd', nft: 1, tag: '#12 626' },
 ];
 const PRICE_STEP = Number(process.env.PRICE_STEP_MS) || 3600000;
-const r2 = (x) => Math.round(x * 100) / 100;
+const r2 = (x) => Math.round(x);
 let lastSlot = 0, ticking = null;
 async function tickPrices() {
   const slot = Math.floor(Date.now() / PRICE_STEP); if (slot === lastSlot) return;
@@ -180,13 +182,13 @@ async function tickPrices() {
 }
 async function curPrices() {
   const rows = await q('SELECT g.gift,g.price FROM gprice g JOIN (SELECT gift,MAX(slot) s FROM gprice GROUP BY gift) m ON m.gift=g.gift AND m.s=g.slot').all(), o = {};
-  for (const r of rows) o[r.gift] = r.price; for (let i = 0; i < CAT.length; i++) if (o[i] == null) o[i] = CAT[i].p; return o;
+  for (const r of rows) o[r.gift] = Math.round(r.price); for (let i = 0; i < CAT.length; i++) if (o[i] == null) o[i] = CAT[i].p; return o;
 }
 async function giftList() {
   const out = [];
   for (let i = 0; i < CAT.length; i++) {
-    const h = (await q('SELECT price FROM gprice WHERE gift=? ORDER BY slot DESC LIMIT 25').all(i)).map((x) => x.price).reverse(), n = h.length, cur = n ? h[n - 1] : CAT[i].p;
-    out.push({ id: i, name: CAT[i].n, base: CAT[i].p, color: CAT[i].c, nft: !!CAT[i].nft, tag: CAT[i].tag || '', price: cur, change: n > 1 ? r2((h[n - 1] / h[n - 2] - 1) * 100) : 0, hist: h });
+    const h = (await q('SELECT price FROM gprice WHERE gift=? ORDER BY slot DESC LIMIT 25').all(i)).map((x) => Math.round(x.price)).reverse(), n = h.length, cur = n ? h[n - 1] : CAT[i].p;
+    out.push({ id: i, name: CAT[i].n, base: CAT[i].p, color: CAT[i].c, nft: !!CAT[i].nft, tag: CAT[i].tag || '', price: cur, change: n > 1 ? Math.round((h[n - 1] / h[n - 2] - 1) * 10000) / 100 : 0, hist: h });
   }
   return out;
 }
@@ -705,7 +707,7 @@ async function api(req, res, url) {
       const price = (await curPrices())[gi];
       if (b.expect != null && Math.abs(Number(b.expect) - price) > 0.005) return fail(res, 409, 'Narx o’zgardi: ★ ' + price + '. Qayta urinib ko’ring.', { price });
       // 1-qadam: Stars'ni bitta shartli buyruq bilan yechamiz (yetmasa 0 qator o’zgaradi)
-      const dd = await q('UPDATE users SET stars=ROUND(stars-?,2) WHERE id=? AND stars>=?').run(price, u.id, price);
+      const dd = await q('UPDATE users SET stars=ROUND(stars-?,0) WHERE id=? AND stars>=?').run(price, u.id, price);
       if (dd.changes !== 1) return fail(res, 402, 'Stars yetarli emas.');
       let gid, msg = null;
       try {
@@ -718,7 +720,7 @@ async function api(req, res, url) {
           msg = msgOut(await q('SELECT * FROM messages WHERE id=?').get(r.lastInsertRowid));
         }
       } catch (e) {
-        await q('UPDATE users SET stars=ROUND(stars+?,2) WHERE id=?').run(price, u.id); await ledger(u.id, price, 'refund', 'sovg’a xatosi').catch(() => {});
+        await q('UPDATE users SET stars=ROUND(stars+?,0) WHERE id=?').run(price, u.id); await ledger(u.id, price, 'refund', 'sovg’a xatosi').catch(() => {});
         if (gid) await q('UPDATE gifts_owned SET sold=1 WHERE id=?').run(gid).catch(() => {});
         console.error('gift buy', e.message); return fail(res, 500, 'Xatolik. Stars qaytarildi.');
       }
@@ -735,7 +737,7 @@ async function api(req, res, url) {
         const price = (await curPrices())[row.gift];
         const r = await q('UPDATE gifts_owned SET sold=1 WHERE id=? AND owner_id=? AND sold=0').run(gid, u.id);
         if (r.changes !== 1) return fail(res, 409, 'Sovg’a allaqachon sotilgan.');
-        await q('UPDATE users SET stars=ROUND(stars+?,2) WHERE id=?').run(price, u.id);
+        await q('UPDATE users SET stars=ROUND(stars+?,0) WHERE id=?').run(price, u.id);
         await ledger(u.id, price, 'gift_sell', CAT[row.gift].n);
         await refreshGifts(u.id);
         return send(res, 200, { price, stars: (await q('SELECT stars FROM users WHERE id=?').get(u.id)).stars });
@@ -764,7 +766,7 @@ async function api(req, res, url) {
     if (key === 'POST /api/admin/stars') {
       const b = await readBody(req), p = await userBy(String(b.username || '').replace('@', '').trim()), d = Number(b.delta);
       if (!p || !Number.isFinite(d) || Math.abs(d) > 1e7) return fail(res, 400, 'Noto’g’ri so’rov.');
-      const before = p.stars; await q('UPDATE users SET stars=MAX(0,ROUND(stars+?,2)) WHERE id=?').run(d, p.id); const after = (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars; await ledger(p.id, Math.round((after - before) * 100) / 100, 'admin', 'by @' + u.username); if (after > before) await adminMsg(u, p, '✅ Buyurtmangiz tushdi: ★ ' + (Math.round((after - before) * 100) / 100) + ' Stars hisobingizga qo’shildi.'); return send(res, 200, { stars: (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars });
+      const before = p.stars; await q('UPDATE users SET stars=MAX(0,ROUND(stars+?,0)) WHERE id=?').run(d, p.id); const after = (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars; await ledger(p.id, Math.round((after - before) * 100) / 100, 'admin', 'by @' + u.username); if (after > before) await adminMsg(u, p, '✅ Buyurtmangiz tushdi: ★ ' + (Math.round((after - before) * 100) / 100) + ' Stars hisobingizga qo’shildi.'); return send(res, 200, { stars: (await q('SELECT stars FROM users WHERE id=?').get(p.id)).stars });
     }
     if (key === 'POST /api/admin/premium') {
       const b = await readBody(req), p = await userBy(String(b.username || '').replace('@', '').trim()), PLANS = { '1m': [30, '1 oylik'], '3m': [90, '3 oylik'], '1y': [365, '1 yillik'] }, pl = PLANS[b.plan], days = pl ? pl[0] : Number(b.days);
@@ -778,11 +780,12 @@ async function api(req, res, url) {
 
 // ---------- ilova (PWA): manifest, ikonkalar, service worker ----------
 const B64 = (s) => Buffer.from(s, 'base64');
-const SW = `const C='jg-v1';
+const SW = `const C='jg-v2';
 self.addEventListener('install',()=>self.skipWaiting());
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==C).map(x=>caches.delete(x)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{const r=e.request,u=new URL(r.url);if(r.method!=='GET'||u.origin!==location.origin||u.pathname.startsWith('/api/'))return;
-e.respondWith(fetch(r).then(res=>{if(res.ok){const cp=res.clone();caches.open(C).then(c=>c.put(r,cp))}return res}).catch(()=>caches.match(r).then(m=>m||caches.match('/'))))});`;
+const nav=r.mode==='navigate';
+e.respondWith(caches.match(nav?'/':r).then(m=>{const net=fetch(r).then(res=>{if(res.ok){const cp=res.clone();caches.open(C).then(c=>c.put(nav?'/':r,cp))}return res}).catch(()=>m);return m||net}))});`;
 const MANIFEST = JSON.stringify({ id: '/', name: 'JoxaGram', short_name: 'JoxaGram', description: 'JoxaGram messenjer', lang: 'uz', start_url: '/', scope: '/', display: 'standalone', orientation: 'portrait', background_color: '#050b1f', theme_color: '#050b1f',
   icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }] });
 const PWA = {
