@@ -205,7 +205,7 @@ async function refreshGifts(uid) {
   bcast(uid);
 }
 const msgOut = (m) => ({ id: m.id, from: m.from_id, to: m.to_id, text: m.text, created: m.created, edited: !!m.edited, kind: m.kind || '', media: m.media_id || 0, vtext: m.vtext || '', gift: m.gift == null ? null : m.gift, read: !!m.rd });
-const kindLabel = (m) => m.text || (m.kind === 'img' ? '[rasm]' : m.kind === 'voice' ? '[ovozli xabar]' : '');
+const kindLabel = (m) => m.text || (m.kind === 'img' ? '[rasm]' : m.kind === 'voice' ? '[ovozli xabar]' : m.kind === 'video' ? '[video]' : '');
 
 async function auth(req) {
   const t = cookies(req).sid; if (!t) return null;
@@ -260,7 +260,8 @@ async function reactCounts(ids) {
 // ---------- rasm, ovoz, profil rasmi ----------
 const MEDIA_IMG = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MEDIA_AUD = /^data:(audio\/(?:webm|ogg|mp4|mpeg|wav|x-m4a|aac))(?:;codecs=[\w.,-]+)?;base64,([A-Za-z0-9+/=]+)$/;
-const USER_QUOTA = 40 * 1024 * 1024;
+const MEDIA_VID = /^data:(video\/(?:webm|mp4))(?:;codecs=[\w.,-]+)?;base64,([A-Za-z0-9+\/=]+)$/;
+const USER_QUOTA = 60 * 1024 * 1024;
 async function takeMedia(b, uid) {
   if (!b.media) return { id: 0, kind: '', vtext: '' };
   const r = await q('SELECT id,owner_id,kind FROM media WHERE id=?').get(Number(b.media));
@@ -424,13 +425,14 @@ async function api(req, res, url) {
 
   if (key === 'POST /api/media') {
     if (limited('media' + u.id, 40, 3600000)) return fail(res, 429, 'Juda ko’p fayl yubordingiz. Keyinroq urinib ko’ring.');
-    const b = await readBody(req, 1000000), kind = b.kind === 'voice' ? 'voice' : b.kind === 'img' ? 'img' : '', d = String(b.data || '');
+    const b = await readBody(req, 6000000), kind = b.kind === 'voice' ? 'voice' : b.kind === 'img' ? 'img' : b.kind === 'video' ? 'video' : '', d = String(b.data || '');
     if (!kind) return fail(res, 400, 'Fayl turi noto’g’ri.');
-    const mt = (kind === 'img' ? MEDIA_IMG : MEDIA_AUD).exec(d); if (!mt) return fail(res, 400, kind === 'img' ? 'Rasm noto’g’ri.' : 'Ovozli xabar formati noto’g’ri.');
+    const mt = (kind === 'img' ? MEDIA_IMG : kind === 'video' ? MEDIA_VID : MEDIA_AUD).exec(d); if (!mt) return fail(res, 400, kind === 'img' ? 'Rasm noto’g’ri.' : kind === 'video' ? 'Video formati noto’g’ri (mp4 yoki webm).' : 'Ovozli xabar formati noto’g’ri.');
     const size = Math.floor(mt[2].length * 0.75), dur = Math.max(0, Math.min(600, Math.round(Number(b.dur) || 0)));
-    if (size > (kind === 'img' ? 450000 : 700000)) return fail(res, 413, kind === 'img' ? 'Rasm juda katta.' : 'Ovozli xabar juda uzun.');
+    if (size > (kind === 'img' ? 450000 : kind === 'video' ? 4000000 : 700000)) return fail(res, 413, kind === 'img' ? 'Rasm juda katta.' : kind === 'video' ? 'Video juda katta. 30 soniyagacha bo’lsin.' : 'Ovozli xabar juda uzun.');
+    if (kind === 'video' && dur > 60) return fail(res, 413, 'Video 60 soniyadan oshmasin.');
     if (kind === 'voice' && dur > 180) return fail(res, 413, 'Ovozli xabar 3 daqiqadan oshmasin.');
-    if (Number((await q('SELECT COALESCE(SUM(size),0) s FROM media WHERE owner_id=?').get(u.id)).s) + size > USER_QUOTA) return fail(res, 413, 'Fayllar uchun joy tugadi. Eski rasm va ovozlar o’chirilgach yana yuborasiz.');
+    if (Number((await q('SELECT COALESCE(SUM(size),0) s FROM media WHERE owner_id=?').get(u.id)).s) + size > USER_QUOTA) return fail(res, 413, 'Fayllar uchun joy tugadi. Eski rasm, ovoz va videolar o’chirilgach yana yuborasiz.');
     const r = await q('INSERT INTO media(owner_id,kind,mime,data,size,dur,created) VALUES(?,?,?,?,?,?,?)').run(u.id, kind, mt[1], mt[2], size, dur, Date.now());
     return send(res, 201, { media: { id: Number(r.lastInsertRowid), kind, size, dur } });
   }
