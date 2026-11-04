@@ -87,7 +87,7 @@ for (const st of [
   `ALTER TABLE users ADD COLUMN aupd INTEGER DEFAULT 0`,
   `ALTER TABLE users ADD COLUMN gcol TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN gl TEXT DEFAULT '[]'`, `ALTER TABLE users ADD COLUMN gsel INTEGER DEFAULT 0`,
   `ALTER TABLE messages ADD COLUMN gift INTEGER`, `ALTER TABLE messages ADD COLUMN rd INTEGER DEFAULT 0`,
-  `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE users ADD COLUMN ahide INTEGER DEFAULT 0`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
+  `ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''`, `ALTER TABLE members ADD COLUMN role INTEGER DEFAULT 0`, `ALTER TABLE users ADD COLUMN ahide INTEGER DEFAULT 0`, `ALTER TABLE users ADD COLUMN bgupd INTEGER DEFAULT 0`,
 ]) { try { await db.exec(st); } catch (e) { if (!/duplicate|already|exists/i.test(e.message)) console.error('migratsiya:', st.slice(0, 60), e.message); } }
 
 try { await db.exec(`UPDATE users SET stars=ROUND(stars) WHERE stars<>ROUND(stars)`); } catch (e) { console.error('stars migratsiya:', e.message); }
@@ -232,10 +232,11 @@ setInterval(() => { for (const set of streams.values()) for (const r of set) r.w
 const REACTS = ['👍', '❤️', '🔥', '😂', '😮', '😢', '🙏', '👎'];
 const VOTES_EACH = 5;
 const lvOf = (v) => v < 1 ? 0 : v < 4 ? 1 : v < 10 ? 2 : 3 + Math.floor((v - 10) / 5);
-const CHSEL = `SELECT c.id,c.kind,c.username,c.name,c.descr,c.private,c.owner_id,c.upd,c.created,(LENGTH(c.avatar)>0) hasava,(LENGTH(c.bg)>0) hasbg,(SELECT COUNT(*) FROM members WHERE channel_id=c.id) cnt,(SELECT COALESCE(SUM(n),0) FROM votes WHERE channel_id=c.id) v FROM channels c`;
-const chOut = (r, uid) => ({ id: r.id, kind: r.kind, username: r.username, name: r.name, descr: r.descr, private: !!r.private, mine: r.owner_id === uid, count: Number(r.cnt), v: Number(r.v), created: r.created, level: r.kind === 'k' ? lvOf(Number(r.v)) : 0,
+const CHSEL = `SELECT c.id,c.kind,c.username,c.name,c.descr,c.private,c.owner_id,c.upd,c.created,(LENGTH(c.avatar)>0) hasava,(LENGTH(c.bg)>0) hasbg,(SELECT COUNT(*) FROM members WHERE channel_id=c.id) cnt,(SELECT GROUP_CONCAT(user_id) FROM members WHERE channel_id=c.id AND role=1) admins,(SELECT COALESCE(SUM(n),0) FROM votes WHERE channel_id=c.id) v FROM channels c`;
+const chOut = (r, uid) => ({ id: r.id, kind: r.kind, username: r.username, name: r.name, descr: r.descr, private: !!r.private, mine: r.owner_id === uid, adm: String(r.admins || '').split(',').includes(String(uid)), count: Number(r.cnt), v: Number(r.v), created: r.created, level: r.kind === 'k' ? lvOf(Number(r.v)) : 0,
   ava: r.hasava ? `/api/channels/${r.id}/avatar?v=${r.upd}` : '', bg: r.hasbg && r.kind === 'k' ? `/api/channels/${r.id}/bg?v=${r.upd}` : '' });
 const chById = async (id) => await q(CHSEL + ' WHERE c.id=?').get(id);
+const isAdminOf = async (cid, uid) => !!await q('SELECT 1 FROM members m JOIN channels c ON c.id=m.channel_id WHERE m.channel_id=? AND m.user_id=? AND (m.role=1 OR c.owner_id=m.user_id)').get(cid, uid);
 const isMember = async (cid, uid) => !!await q('SELECT 1 FROM members WHERE channel_id=? AND user_id=?').get(cid, uid);
 const memberIds = async (cid) => (await q('SELECT user_id FROM members WHERE channel_id=?').all(cid)).map((r) => r.user_id);
 async function pushCh(cid, event, data) { for (const id of await memberIds(cid)) push(id, event, data); }
@@ -479,13 +480,13 @@ async function api(req, res, url) {
       const out = cmOut(await cmById(m.id)); await pushCh(m.channel_id, 'cedit', { message: out }); return send(res, 200, { message: out });
     }
     if (mm[1] === 'DELETE') {
-      if (m.from_id !== u.id && row.owner_id !== u.id) return fail(res, 403, 'Ruxsat yo’q.');
+      if (m.from_id !== u.id && row.owner_id !== u.id && !await isAdminOf(m.channel_id, u.id)) return fail(res, 403, 'Ruxsat yo’q.');
       await q('DELETE FROM creacts WHERE msg_id=?').run(m.id); await q('DELETE FROM cmsgs WHERE id=?').run(m.id); if (m.media_id) await q('DELETE FROM media WHERE id=?').run(m.media_id);
       await pushCh(m.channel_id, 'cdelete', { id: m.id, channel: m.channel_id }); return send(res, 200, { ok: true });
     }
     return fail(res, 405, 'Noto’g’ri so’rov.');
   }
-  const mc = /^(GET|POST|PATCH|DELETE) \/api\/channels(?:\/(\d+)(?:\/(avatar|bg|join|leave|members|messages|vote|votes)(?:\/([a-z_]+))?)?)?$/.exec(key);
+  const mc = /^(GET|POST|PATCH|DELETE) \/api\/channels(?:\/(\d+)(?:\/(avatar|bg|join|leave|members|messages|vote|votes|admins)(?:\/([a-z_]+))?)?)?$/.exec(key);
   if (mc) {
     const meth = mc[1], cid = mc[2] ? Number(mc[2]) : 0, sub = mc[3] || '', arg = mc[4] || '';
     if (!cid) {
@@ -520,11 +521,12 @@ async function api(req, res, url) {
       return send(res, 201, { channel: chOut(await chById(id), u.id) });
     }
     const row = await chById(cid); if (!row) return fail(res, 404, 'Topilmadi.');
-    const mem = await isMember(cid, u.id), owner = row.owner_id === u.id, open = row.kind === 'k' && !row.private;
+    const mem = await isMember(cid, u.id), owner = row.owner_id === u.id, adm = owner || await isAdminOf(cid, u.id), open = row.kind === 'k' && !row.private;
     if (!sub) {
       if (meth === 'GET') { if (!mem && !open) return fail(res, 404, 'Topilmadi.'); return send(res, 200, { channel: chOut(row, u.id), member: mem }); }
-      if (!owner) return fail(res, 403, 'Faqat egasi o’zgartira oladi.');
+      if (!adm) return fail(res, 403, 'Faqat adminlar o’zgartira oladi.');
       if (meth === 'DELETE') {
+        if (!owner) return fail(res, 403, 'O’chirish faqat egasiga ruxsat.');
         const ids = await memberIds(cid);
         await q('DELETE FROM media WHERE id IN (SELECT media_id FROM cmsgs WHERE channel_id=? AND media_id>0)').run(cid);
         await q('DELETE FROM creacts WHERE msg_id IN (SELECT id FROM cmsgs WHERE channel_id=?)').run(cid);
@@ -565,11 +567,11 @@ async function api(req, res, url) {
     }
     if (sub === 'members') {
       if (meth === 'GET') {
-        if (!mem || (row.kind === 'k' && !owner)) return fail(res, 403, 'Ruxsat yo’q.');
-        const us = await q('SELECT x.* FROM members m JOIN users x ON x.id=m.user_id WHERE m.channel_id=? ORDER BY m.joined LIMIT 300').all(cid);
-        return send(res, 200, { members: us.map((x) => ({ ...pub(x), owner: x.id === row.owner_id })) });
+        if (!mem || (row.kind === 'k' && !adm)) return fail(res, 403, 'Ruxsat yo’q.');
+        const us = await q('SELECT x.*,m.role mrole FROM members m JOIN users x ON x.id=m.user_id WHERE m.channel_id=? ORDER BY m.joined LIMIT 300').all(cid);
+        return send(res, 200, { members: us.map((x) => ({ ...pub(x), owner: x.id === row.owner_id, admin: Number(x.mrole) === 1 })), me_adm: adm });
       }
-      if (!owner) return fail(res, 403, 'Faqat egasi a’zo qo’sha va chiqara oladi.');
+      if (!adm) return fail(res, 403, 'Faqat adminlar a’zo qo’sha va chiqara oladi.');
       if (meth === 'POST') {
         const p = await userBy((await readBody(req)).username); if (!p) return fail(res, 404, 'Foydalanuvchi topilmadi.');
         if (await blocked(u.id, p.id)) return fail(res, 403, 'Bu foydalanuvchini qo’shib bo’lmaydi.');
@@ -578,6 +580,8 @@ async function api(req, res, url) {
       }
       if (meth === 'DELETE') {
         const p = await userBy(arg); if (!p || p.id === u.id) return fail(res, 404, 'Foydalanuvchi topilmadi.');
+        if (p.id === row.owner_id) return fail(res, 403, 'Egasini chiqarib bo’lmaydi.');
+        if (!owner && await isAdminOf(cid, p.id)) return fail(res, 403, 'Adminni faqat egasi chiqara oladi.');
         await q('DELETE FROM members WHERE channel_id=? AND user_id=?').run(cid, p.id); push(p.id, 'cremove', { id: cid }); return send(res, 200, { ok: true });
       }
       return fail(res, 405, 'Noto’g’ri so’rov.');
@@ -593,11 +597,21 @@ async function api(req, res, url) {
       }
       if (meth !== 'POST') return fail(res, 405, 'Noto’g’ri so’rov.');
       if (limited('cmsg' + u.id, 60, 60000)) return fail(res, 429, 'Juda tez yozyapsiz.');
-      if (row.kind === 'k' && !owner) return fail(res, 403, 'Kanalga faqat egasi post yozadi.');
+      if (row.kind === 'k' && !adm) return fail(res, 403, 'Kanalga faqat adminlar post yozadi.');
       const b = await readBody(req), text = String(b.text || '').trim(), mx = await takeMedia(b, u.id); if (mx.err) return fail(res, 400, mx.err);
       if ((!text && !mx.id) || text.length > 4000) return fail(res, 400, 'Xabar 1–4000 belgi bo’lsin.');
       const r = await q('INSERT INTO cmsgs(channel_id,from_id,text,created,kind,media_id,vtext) VALUES(?,?,?,?,?,?,?)').run(cid, u.id, text, Date.now(), mx.kind, mx.id, mx.vtext);
       const out = cmOut(await cmById(r.lastInsertRowid)); await pushCh(cid, 'cmsg', { message: out }); return send(res, 201, { message: out });
+    }
+    if (sub === 'admins') {
+      if (meth !== 'POST') return fail(res, 405, 'Noto’g’ri so’rov.');
+      if (!adm) return fail(res, 403, 'Faqat adminlar admin qo’sha oladi.');
+      const b = await readBody(req), p = await userBy(b.username); if (!p || !await isMember(cid, p.id)) return fail(res, 404, 'Bu foydalanuvchi a’zo emas.');
+      if (p.id === row.owner_id) return fail(res, 400, 'Egasi allaqachon admin.');
+      if (!b.on && !owner) return fail(res, 403, 'Adminlikni faqat egasi olib tashlaydi.');
+      if (b.on && p.id === u.id) return fail(res, 400, 'Siz allaqachon adminsiz.');
+      await q('UPDATE members SET role=? WHERE channel_id=? AND user_id=?').run(b.on ? 1 : 0, cid, p.id); await pushChannel(cid);
+      return send(res, 200, { ok: true });
     }
     if (sub === 'vote') {
       if (meth !== 'POST') return fail(res, 405, 'Noto’g’ri so’rov.');
