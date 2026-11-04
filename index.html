@@ -209,9 +209,9 @@ function chat(){
  $("ca").outerHTML=ava(c).replace('class="av"','class="av" id="ca" style="width:38px;height:38px;font-size:15px"');
  LD="";$("cn").innerHTML=nick(c)+TG(c)+(c.t=="k"?'<div class="ls">'+((c.mem||[]).length+1)+' obunachi</div>':c.t=="g"?'<div class="ls">'+((c.mem||[]).length+1)+' a’zo</div>':"");
  var h="";
- if(c.t=="k")c.po.forEach(function(p,i){h+=DSP(p)+'<div class="m po" data-pi="'+i+'">'+(p.img!=null?'<img src="'+GFT[p.img].i+'" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:12px;display:block;margin:0 auto 6px">':"")+(p.im?'<img src="'+p.im+'" alt="" style="max-width:100%;border-radius:12px;display:block;margin-bottom:6px">':"")+(p.vd?'<video src="'+p.vd+'" controls playsinline style="max-width:100%;border-radius:12px;display:block;margin-bottom:6px"></video>':"")+'<div>'+E(p.x)+'</div>'+TMP(p)+'<div class="rx">';
+ if(c.t=="k")c.po.forEach(function(p,i){h+=DSP(p)+'<div class="m po" data-pi="'+i+'">'+(p.img!=null?'<img src="'+GFT[p.img].i+'" alt="" style="width:96px;height:96px;object-fit:cover;border-radius:12px;display:block;margin:0 auto 6px">':"")+(p.vd?'<video src="'+p.vd+'" controls playsinline preload="metadata" style="max-width:100%;border-radius:12px;display:block;margin-bottom:4px"></video>':"")+(p.im?'<img src="'+p.im+'" alt="" style="max-width:100%;border-radius:12px;display:block;margin-bottom:6px">':"")+(p.vd?'<video src="'+p.vd+'" controls playsinline style="max-width:100%;border-radius:12px;display:block;margin-bottom:6px"></video>':"")+'<div>'+E(p.x)+'</div>'+TMP(p)+'<div class="rx">';
   if(lv(c)>5)Object.keys(p.r).forEach(function(k){h+='<button data-p="'+i+'" data-k="'+k+'" class="'+(p.my==k?"me":"")+'">'+k+" "+p.r[k]+"</button>"});h+="</div></div>"});
- else c.m.forEach(function(x,j){if(x[2]!=null&&GFT[x[2]]){h+=DS(x)+giftBlk(x,c,j);return}h+=DS(x)+'<div class="m '+x[0]+'" data-j="'+j+'">'+(x[11]&&x[0]=="i"?'<div style="font-weight:700;font-size:13px;color:var(--cy);margin-bottom:2px">'+E(x[11])+'</div>':"")+(x[3]?VO(x):"")+(x[6]?'<img src="'+x[6]+'" alt="" style="max-width:100%;border-radius:12px;display:block;margin-bottom:4px">':"")+(x[7]?'<video src="'+x[7]+'" controls playsinline style="max-width:100%;border-radius:12px;display:block;margin-bottom:4px"></video>':"")+(x[2]!=null?'<img src="'+GFT[x[2]].i+'" alt="" style="width:96px;height:96px;'+(GFT[x[2]].nft?'object-fit:contain;background:'+GFT[x[2]].c:'object-fit:cover')+';border-radius:12px;display:block;margin:0 auto 6px">':"")+E(x[1])+rxRow(x)+TM(x)+"</div>"});
+ else c.m.forEach(function(x,j){if(x[2]!=null&&GFT[x[2]]){h+=DS(x)+giftBlk(x,c,j);return}h+=DS(x)+'<div class="m '+x[0]+'" data-j="'+j+'">'+(x[11]&&x[0]=="i"?'<div style="font-weight:700;font-size:13px;color:var(--cy);margin-bottom:2px">'+E(x[11])+'</div>':"")+(x[3]?VO(x):"")+(x[6]?'<img src="'+x[6]+'" alt="" style="max-width:100%;border-radius:12px;display:block;margin-bottom:4px">':"")+(x[7]?'<video src="'+x[7]+'" controls playsinline preload="metadata" style="max-width:100%;border-radius:12px;display:block;margin-bottom:4px"></video>':"")+(x[2]!=null?'<img src="'+GFT[x[2]].i+'" alt="" style="width:96px;height:96px;'+(GFT[x[2]].nft?'object-fit:contain;background:'+GFT[x[2]].c:'object-fit:cover')+';border-radius:12px;display:block;margin:0 auto 6px">':"")+E(x[1])+rxRow(x)+TM(x)+"</div>"});
  var ms=$("ms");ms.innerHTML=h;ms.style.backgroundImage=S.prem&&S.me.bg?'linear-gradient(rgba(4,9,26,.35),rgba(4,9,26,.35)),url('+S.me.bg+')':"";CC(ms);if(c.bg)ms.style.backgroundImage="url("+c.bg+")";$("ph").style.display=c.t=="k"&&!c.own?"none":"block";$("ed").style.display=(c.t=="k"||c.t=="g")&&c.own?"block":"none";ms.scrollTop=ms.scrollHeight;
  $("cp").style.display=(c.t=="k"&&!c.own)?"none":"flex";$("gf").style.display=c.t=="u"&&!c.saved&&!c.sup?"block":"none";$("mc").style.display=c.t=="k"?"none":"block";
  $("mi").placeholder=c.t=="k"?"Kanalga post yozing…":"Xabar yozing…";
@@ -418,8 +418,8 @@ var UID=0,es=null,qt=0,pt=0;
 function api(m,u,b){return fetch(u,{method:m,headers:{"content-type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json().catch(function(){return{}}).then(function(d){if(!r.ok){var e=new Error(d.error||"Xato");e.status=r.status;throw e}return d})})}
 function note(t){modal('<p>'+E(t)+'</p>'+xc())}
 function mapU(u){return{n:u.name,u:u.username,p:u.premium?1:0,g:u.gl||[],gc:u.gc||"",uid:u.id,ava:u.ava||"",adm:u.adm?1:0,bd:u.bd||""}}
-function msg(m){var x=[m.from==UID?"o":"i",m.text,null,"","",0,"","",m.edited?1:0,m.created,m.id];if(m.kind=="gift")x[2]=m.gift;if(m.kind=="img")x[6]="/api/media/"+m.media;if(m.kind=="voice"){x[3]="/api/media/"+m.media;x[4]=m.vtext||"";x[13]=m.media}if(m.from==UID&&m.to!=null&&m.to!=m.from)x[12]=m.read?2:1;x[15]=m.reacts||{};x[16]=m.my||"";return x}
-function lastTxt(l){return l.kind=="img"?"📷 Rasm":l.kind=="voice"?"🎙 Ovozli xabar":l.text}
+function msg(m){var x=[m.from==UID?"o":"i",m.text,null,"","",0,"","",m.edited?1:0,m.created,m.id];if(m.kind=="gift")x[2]=m.gift;if(m.kind=="img")x[6]="/api/media/"+m.media;if(m.kind=="video")x[7]="/api/media/"+m.media;if(m.kind=="voice"){x[3]="/api/media/"+m.media;x[4]=m.vtext||"";x[13]=m.media}if(m.from==UID&&m.to!=null&&m.to!=m.from)x[12]=m.read?2:1;x[15]=m.reacts||{};x[16]=m.my||"";return x}
+function lastTxt(l){return l.kind=="video"?"🎬 Video":l.kind=="img"?"📷 Rasm":l.kind=="voice"?"🎙 Ovozli xabar":l.text}
 function chatFor(u,end){var c=CH.filter(function(x){return x.t=="u"&&x.u==u.username})[0];if(!c){c=Object.assign({id:nid++,t:"u",m:[],srv:1,loaded:0},mapU(u));if(end)CH.push(c);else CH.unshift(c)}return c}
 function add(c,m){if(c.m.some(function(x){return x[10]==m.id}))return;if(m.from==UID){var p=c.m.filter(function(x){return x[10]===0&&x[1]==m.text})[0];if(p){p[10]=m.id;p[9]=m.created;p[12]=m.read?2:1;return}}c.m.push(msg(m))}
 function pinSv(){var v=CH.filter(function(x){return x.saved})[0];if(v&&CH[0]!==v){CH.splice(CH.indexOf(v),1);CH.unshift(v)}}
@@ -447,7 +447,7 @@ function start(u){applyMe(u);accRemember(u);S.sv=1;CH.length=0;US.length=0;S.vl=
 function cm(n){return new Array(Math.max(0,(n||1)-1)).fill(0)}
 function full(r){var o={"👍":0,"❤️":0,"🔥":0};for(var k in r)o[k]=r[k];return o}
 function gm(m){var x=msg(m);x[11]=m.name;return x}
-function post(m){return{id:m.id,x:m.text,r:full(m.reacts||{}),my:m.my||"",t:m.created,ed:m.edited?1:0,im:m.kind=="img"?"/api/media/"+m.media:""}}
+function post(m){return{id:m.id,x:m.text,r:full(m.reacts||{}),my:m.my||"",t:m.created,ed:m.edited?1:0,im:m.kind=="img"?"/api/media/"+m.media:"",vd:m.kind=="video"?"/api/media/"+m.media:""}}
 function chanObj(x){var c={id:nid++,t:x.kind,n:x.name,u:x.username,p:0,g:[],cid:x.id,own:(x.mine||x.adm)?1:0,ow:x.mine?1:0,pv:x.private?1:0,d:x.descr||"",ava:x.ava||"",bg:x.bg||"",v:x.v||0,mem:cm(x.count),po:[],m:[],loaded:0,ts:x.created||0};
  if(x.last){c.ts=x.last.created;if(x.kind=="k")c.po=[{id:x.last.id,x:lastTxt(x.last),r:full({}),my:"",t:x.last.created}];else c.m=[["i",lastTxt(x.last),null,"","",0,"","",0,x.last.created,x.last.id,x.last.name]]}
  return c}
@@ -522,8 +522,31 @@ $("ph").onclick=function(){var c=cc();if(c&&(c.srv||c.cid||c.saved)){$("pf").cli
 $("sd").onclick=function(){send()};
 // rasm, ovozli xabar, profil rasmi (serverga)
 $("pf").onchange=function(){var f=this.files[0];this.value="";if(!f)return;var c=cc();if(!c)return;
- if(f.type.indexOf("video")==0){note("Video yuborish keyingi bosqichda ulanadi. Hozircha rasm yuboring.");return}
+ if(f.type.indexOf("video")==0){sendVideo(c,f);return}
  J.pick(f,1280,.72).then(function(d){if(!d){note("Rasmni o’qib bo’lmadi.");return}J.sendMedia(c,"img",d,0,"","")})};
+
+function vidMeta(f){return new Promise(function(ok,no){var v=document.createElement("video");v.preload="metadata";v.onloadedmetadata=function(){var r={d:v.duration,w:v.videoWidth,h:v.videoHeight};URL.revokeObjectURL(v.src);ok(r)};v.onerror=function(){no(new Error("Videoni o’qib bo’lmadi."))};v.src=URL.createObjectURL(f)})}
+function readURL(b){return new Promise(function(ok,no){var fr=new FileReader();fr.onload=function(){ok(fr.result)};fr.onerror=function(){no(new Error("Faylni o’qib bo’lmadi."))};fr.readAsDataURL(b)})}
+function vidPrep(f){return vidMeta(f).then(function(m){if(!(m.d>0&&isFinite(m.d)))throw new Error("Videoni o’qib bo’lmadi.");
+ if(f.size<=3400000&&m.d<=60&&/^video\/(mp4|webm)$/.test(f.type))return readURL(f).then(function(d){return{data:d,dur:Math.round(m.d)}});return vidTrans(f,m)})}
+function vidTrans(f,m){return new Promise(function(ok,no){
+ var v=document.createElement("video"),url=URL.createObjectURL(f),k=Math.min(1,480/Math.max(m.w,m.h)),W=Math.max(2,Math.round(m.w*k/2)*2),H=Math.max(2,Math.round(m.h*k/2)*2),cv=document.createElement("canvas");cv.width=W;cv.height=H;
+ var cx=cv.getContext("2d"),lim=Math.min(m.d,30),out=cv.captureStream(24),ac=null,rec,ch=[],raf,t0=0,err=null,lastU=0;
+ v.src=url;v.playsInline=true;v.preload="auto";
+ try{ac=new (window.AudioContext||window.webkitAudioContext)();var sr=ac.createMediaElementSource(v),ds=ac.createMediaStreamDestination();sr.connect(ds);ds.stream.getAudioTracks().forEach(function(t){out.addTrack(t)});ac.resume()}catch(e){ac=null}
+ var mt=["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm"].filter(function(t){try{return MediaRecorder.isTypeSupported(t)}catch(z){return false}})[0];
+ if(!mt){URL.revokeObjectURL(url);no(new Error("Brauzer videoni siqa olmaydi. Qisqaroq video tanlang."));return}
+ try{rec=new MediaRecorder(out,{mimeType:mt,videoBitsPerSecond:650000,audioBitsPerSecond:48000})}catch(e){URL.revokeObjectURL(url);no(new Error("Videoni siqib bo’lmadi."));return}
+ rec.ondataavailable=function(e){if(e.data&&e.data.size)ch.push(e.data)};
+ rec.onstop=function(){cancelAnimationFrame(raf);URL.revokeObjectURL(url);try{ac&&ac.close()}catch(z){}if(err)return no(err);var b=new Blob(ch,{type:"video/webm"});if(b.size>3900000)return no(new Error("Video juda katta. Qisqaroq video tanlang."));readURL(b).then(function(d){ok({data:d,dur:Math.max(1,Math.round(Math.min(lim,(Date.now()-t0)/1000)))})},no)};
+ function stop(e){if(e)err=e;try{v.pause()}catch(z){}if(rec.state!="inactive")rec.stop();else rec.onstop()}
+ function draw(){try{cx.drawImage(v,0,0,W,H)}catch(z){}if(v.currentTime>=lim||v.ended){stop();return}var n=Date.now();if(n-lastU>400){lastU=n;var el=$("vpm");if(el)el.textContent="🎬 Video tayyorlanmoqda… "+Math.round(v.currentTime)+" / "+Math.round(lim)+" s"}raf=requestAnimationFrame(draw)}
+ function go(){v.play().then(function(){t0=Date.now();rec.start(500);draw()}).catch(function(){var el=$("vpm");if(el)el.innerHTML="";var b=document.createElement("button");b.className="bt";b.textContent="▶ Davom etish";b.onclick=function(){b.remove();go()};if(el)el.appendChild(b)})}
+ v.onerror=function(){stop(new Error("Videoni o’qib bo’lmadi."))};
+ modal('<p id="vpm">🎬 Video tayyorlanmoqda…</p><div class="hn">Uzun videolar 30 soniyagacha qirqiladi va siqiladi. Ilovani yopmang.</div><button class="bt g" id="vpc">Bekor qilish</button>');
+ $("vpc").onclick=function(){stop(new Error(""))};go()})}
+document.addEventListener("loadedmetadata",function(e){var v=e.target;if(v&&v.tagName=="VIDEO"&&v.duration===Infinity&&!v._fx){v._fx=1;v.addEventListener("timeupdate",function f(){v.removeEventListener("timeupdate",f);v.currentTime=0});v.currentTime=1e101}},true);
+function sendVideo(c,f){var b=$("ph");b.textContent="⏳";vidPrep(f).then(function(r){closeM();return J.sendMedia(c,"video",r.data,r.dur,"","").catch(function(){})},function(e){b.textContent="📷";closeM();if(e&&e.message)note(e.message)})}
 var mrec=null;
 $("mc").onclick=function(){var c=cc();if(!c)return;if(mrec){mrec.stop();return}
  if(!navigator.mediaDevices||!window.MediaRecorder){micFail();return}
@@ -629,7 +652,7 @@ main.addEventListener("change",function(e){var t=e.target;if(!t.files||!t.files[
  if(t.id=="bgf"){t.value="";fit(f,[[1080,.72],[800,.62],[640,.5]],330000).then(function(d){if(!d||d.length*.75>330000){msgM("Rasm katta yoki o’qib bo’lmadi.");return}JG.api("PUT","/api/me/chatbg",{image:d}).then(function(r){JG.applyMe(r.user);render();toast("Chat foni o’zgardi")}).catch(function(er){msgM(er.message)})})}
  if(t.id=="bdf"){t.value="";fit(f,[[96,.8],[64,.7]],60000).then(function(d){if(!d){msgM("Rasmni o’qib bo’lmadi.");return}setBadge({image:d})})}});
 // ---- xabar ustiga bosganda: uzatish, saqlash, nusxa, tahrirlash, o'chirish ----
-function srcOf(c,it,po){if(po)return{text:it.x||"",kind:it.im?"img":"",url:it.im||"",vtext:""};return{text:it[1]||"",kind:it[3]?"voice":it[6]?"img":"",url:it[3]||it[6]||"",vtext:it[3]&&it[4]&&!it[14]?it[4]:""}}
+function srcOf(c,it,po){if(po)return{text:it.x||"",kind:it.im?"img":it.vd?"video":"",url:it.im||it.vd||"",vtext:""};return{text:it[1]||"",kind:it[3]?"voice":it[6]?"img":it[7]?"video":"",url:it[3]||it[6]||it[7]||"",vtext:it[3]&&it[4]&&!it[14]?it[4]:""}}
 function toData(url){return fetch(url,{credentials:"same-origin"}).then(function(r){if(!r.ok)throw new Error("Faylni olib bo’lmadi.");return r.blob()}).then(function(b){return new Promise(function(ok){var fr=new FileReader();fr.onload=function(){ok(fr.result)};fr.readAsDataURL(b)})})}
 function sendCopy(d,src,fw){if(src.kind)return toData(src.url).then(function(u){return JG.sendMedia(d,src.kind,u,0,src.vtext,src.text)});return JG.sendTo(d,(fw&&!d.saved?"↪ ":"")+src.text)}
 function fwd(c,it,po){var src=srcOf(c,it,po),sel={},n=0;
